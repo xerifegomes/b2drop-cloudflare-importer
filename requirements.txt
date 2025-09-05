@@ -1,0 +1,13 @@
+# B2Drop Importer - Dependências
+requests==2.31.0
+pandas==2.1.4
+beautifulsoup4==4.12.2
+lxml==4.9.3
+selenium==4.15.2
+openpyxl==3.1.2
+python-dotenv==1.0.0
+pydantic>=2.8.0
+pydantic-settings>=2.5.2
+loguru==0.7.2
+tqdm==4.66.1
+cloudflare>=4.3.0
