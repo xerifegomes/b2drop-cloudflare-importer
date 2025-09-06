@@ -29,7 +29,7 @@ def run_import(storage: CloudflareStorage):
 
     logger.info("☁️ Etapa 2: Enviando dados para o Cloudflare...")
     df = pd.read_csv(result['export_files'][0])
-    storage_result = storage.store_products_batch(df)
+    storage_result = storage.store_products_batch(df, source="b2drop")
     
     logger.info("📊 Relatório Final de Armazenamento:")
     logger.info(f"   • Total de produtos para processar: {storage_result['total_products']}")
@@ -66,6 +66,10 @@ def show_stats(storage: CloudflareStorage):
         logger.info("   • Produtos por Categoria:")
         for cat, count in stats['categorias'].items():
             logger.info(f"     - {cat}: {count}")
+    if stats.get('produtos_por_fonte'):
+        logger.info("   • Produtos por Fonte:")
+        for source, count in stats['produtos_por_fonte'].items():
+            logger.info(f"     - {source}: {count} produtos")
 
 def main():
     """Função principal para orquestrar ações via CLI."""
@@ -76,7 +80,7 @@ def main():
 
     try:
         storage = CloudflareStorage()
-        if not storage.init_r2_bucket():
+        if not storage.test_connection():
             logger.error("Não foi possível inicializar o armazenamento R2. Verifique as permissões e a configuração.")
             sys.exit(1)
 

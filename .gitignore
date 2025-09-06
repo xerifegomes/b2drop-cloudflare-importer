@@ -58,4 +58,4 @@ htmlcov/
 # Temporary files
 *.tmp
 *.temp
-temp/
+temp/.env.apis

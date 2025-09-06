@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     cloudflare_account_id: Optional[str] = Field(default=None, env="CLOUDFLARE_ACCOUNT_ID")
     cloudflare_kv_namespace_id: Optional[str] = Field(default=None, env="CLOUDFLARE_KV_NAMESPACE_ID")
     cloudflare_r2_bucket_name: Optional[str] = Field(default="b2drop-products-images", env="CLOUDFLARE_R2_BUCKET_NAME")
+    cloudflare_r2_public_domain: Optional[str] = Field(default=None, env="CLOUDFLARE_R2_PUBLIC_DOMAIN")
     
     class Config:
         env_file = ".env"

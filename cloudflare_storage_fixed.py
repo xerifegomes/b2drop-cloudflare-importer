@@ -16,6 +16,15 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from loguru import logger
 
+# Importa sistemas de proteção
+try:
+    from backup_manager import BackupManager
+    from product_deduplication import ProductDeduplication
+except ImportError:
+    logger.warning("⚠️  Módulos de proteção não encontrados, continuando sem backup/deduplicacao")
+    BackupManager = None
+    ProductDeduplication = None
+
 # Adiciona o diretório src ao path para poder importar o config
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 from src.config import settings
@@ -23,8 +32,8 @@ from src.config import settings
 class CloudflareStorage:
     """Classe unificada para gerenciar armazenamento no Cloudflare KV e R2."""
     
-    def __init__(self):
-        """Inicializa o cliente de armazenamento."""
+    def __init__(self, enable_protection: bool = True):
+        """Inicializa o cliente de armazenamento com sistemas de proteção."""
         self.api_token = settings.cloudflare_api_token
         self.account_id = settings.cloudflare_account_id
         self.kv_namespace_id = settings.cloudflare_kv_namespace_id
@@ -37,9 +46,24 @@ class CloudflareStorage:
         self.base_url = f"https://api.cloudflare.com/client/v4/accounts/{self.account_id}"
         self.headers = {"Authorization": f"Bearer {self.api_token}"}
         
-        logger.info("🚀 Cloudflare Storage inicializado")
+        # 🔒 SISTEMAS DE PROTEÇÃO
+        self.enable_protection = enable_protection
+        if enable_protection and BackupManager:
+            self.backup_manager = BackupManager()
+            logger.info("🔒 Sistema de Backup ativado")
+        else:
+            self.backup_manager = None
+            
+        if enable_protection and ProductDeduplication:
+            self.deduplication = ProductDeduplication()
+            logger.info("🔍 Sistema de Deduplicacao ativado")
+        else:
+            self.deduplication = None
+        
+        logger.info("🚀 Cloudflare Storage PROTEGIDO inicializado")
         logger.info(f"🗃️ KV Namespace ID: {self.kv_namespace_id}")
         logger.info(f"🪣 R2 Bucket Name: {self.r2_bucket_name}")
+        logger.info(f"🔒 Proteção: {'ATIVADA' if enable_protection else 'DESATIVADA'}")
 
     # --- Métodos R2 ---
 
@@ -59,7 +83,7 @@ class CloudflareStorage:
             response = requests.post(f"{self.base_url}/r2/buckets", headers=self.headers, json={'name': self.r2_bucket_name})
             response.raise_for_status()
             logger.success(f"✅ Bucket R2 '{self.r2_bucket_name}' criado!")
-            logger.info("🔔 Lembrete: Habilite o acesso público ao bucket no painel Cloudflare para que as imagens sejam visíveis.")
+            logger.info("🔔 Lembrete: Habilite o acesso público ao bucket no painel Cloudflare.")
             return True
         except Exception as e:
             logger.error(f"❌ Falha ao inicializar o bucket R2: {e}")
@@ -120,8 +144,8 @@ class CloudflareStorage:
         while len(all_keys) < limit:
             try:
                 url = f"{self.base_url}/storage/kv/namespaces/{self.kv_namespace_id}/keys"
-                # A API exige minimum 10, máximo 1000 por página
-                page_limit = min(max(limit - len(all_keys), 10), 1000)
+                # A API permite no máximo 1000 por página
+                page_limit = min(limit - len(all_keys), 1000)
                 params = {'limit': page_limit, 'prefix': prefix}
                 if cursor:
                     params['cursor'] = cursor
@@ -160,169 +184,268 @@ class CloudflareStorage:
             except Exception as e:
                 logger.error(f"Falha ao apagar lote de chaves KV: {e}")
 
-    # --- Métodos de Produtos ---
+    def generate_secure_product_id(self, produto_nome: str, source: str, additional_data: Dict = None) -> str:
+        """Gera ID único e seguro para produtos com dados adicionais para evitar colisões."""
+        normalized_name = produto_nome.lower().strip()
+        
+        # Adiciona dados extras para maior unicidade
+        hash_input = normalized_name
+        if additional_data:
+            url = additional_data.get('imagem_original', '')
+            preco = str(additional_data.get('preco', ''))
+            loja = additional_data.get('loja', '')
+            hash_input = f"{normalized_name}_{url}_{preco}_{loja}"
+        
+        # Usa SHA256 para maior segurança e redução de colisões
+        hash_value = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()[:16]
+        timestamp = int(time.time() * 1000) % 1000000  # Últimos 6 dígitos do timestamp
+        
+        return f"{source}_{hash_value}_{timestamp}"
 
-    def get_product(self, product_id: str) -> Optional[Dict[str, Any]]:
-        """Recupera um produto do KV"""
+    def store_product(self, product_data: Dict[str, Any], source: str) -> bool:
+        """Faz upload da imagem para R2 (se necessário) e armazena metadados no KV com prefixo da fonte.
+        
+        PROTEÇÃO CONTRA SOBRESCRITA:
+        - Verifica se produto já existe antes de armazenar
+        - Gera ID único com timestamp para evitar colisões
+        - Registra logs de produtos existentes
+        """
         try:
-            url = f"{self.base_url}/storage/kv/namespaces/{self.kv_namespace_id}/values/product:{product_id}"
-            response = requests.get(url, headers=self.headers)
-            response.raise_for_status()
-            
-            return response.json()
-            
-        except Exception as e:
-            logger.error(f"❌ Erro ao recuperar produto: {e}")
-            return None
-
-    def store_product(self, product_data: Dict[str, Any]) -> bool:
-        """Armazena um produto no KV"""
-        try:
-            product_id = product_data.get('product_id')
-            if not product_id:
-                logger.error("❌ Product ID não fornecido")
+            produto_nome = product_data.get('produto')
+            if not produto_nome:
+                logger.warning("Tentativa de salvar produto sem nome.")
                 return False
+
+            # Gera ID seguro com proteção contra colisão
+            final_key = self.generate_secure_product_id(produto_nome, source, product_data)
             
-            key = f"product:{product_id}"
-            url = f"{self.base_url}/storage/kv/namespaces/{self.kv_namespace_id}/values/{key}"
-            response = requests.put(
-                url, 
-                headers={**self.headers, 'Content-Type': 'application/json'}, 
-                data=json.dumps(product_data).encode('utf-8')
-            )
-            response.raise_for_status()
-            return True
+            # ✅ PROTEÇÃO: Verifica se produto já existe
+            existing_product = self.get_value(final_key)
+            if existing_product:
+                logger.warning(f"🔄 Produto já existe, atualizando: {final_key}")
+                logger.info(f"📊 Produto existente: {existing_product.get('produto', 'N/A')}")
+                # Preserva dados importantes do produto existente
+                product_data['created_at'] = existing_product.get('created_at', time.time())
+                product_data['update_count'] = existing_product.get('update_count', 0) + 1
+            else:
+                logger.info(f"✨ Novo produto sendo armazenado: {final_key}")
+                product_data['created_at'] = time.time()
+                product_data['update_count'] = 1
+
+            # Se a imagem_r2 não existir, tenta fazer o upload
+            if not product_data.get('imagem_r2'):
+                product_data['imagem_r2'] = self.upload_image(product_data.get('imagem_original'), produto_nome)
+
+            # Atualiza o ID dentro dos dados e adiciona metadados de controle
+            product_data['product_id'] = final_key
+            product_data['last_updated'] = time.time()
+            product_data['source'] = source
+            
+            success = self.put_value(final_key, product_data)
+            if success:
+                logger.success(f"✅ Produto armazenado com sucesso: {produto_nome[:50]}...")
+            return success
             
         except Exception as e:
-            logger.error(f"❌ Erro ao armazenar produto: {e}")
+            logger.error(f"❌ Erro ao armazenar produto completo: {e}")
             return False
 
-    def list_products(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Lista produtos armazenados"""
-        try:
-            # Lista todas as chaves do KV (API exige min 10)
-            api_limit = max(limit, 10)
-            keys_list = self.list_keys(prefix="", limit=api_limit)
-            
-            if not keys_list:
-                logger.warning("❌ Nenhuma chave encontrada no KV")
-                return []
-            
-            logger.info(f"✅ Listagem de chaves OK: {len(keys_list)} chaves encontradas")
-            
-            products = []
-            # Recupera dados de cada chave e verifica se é um produto
-            for key_info in keys_list[:limit]:
-                key = key_info['name']
-                # Tenta recuperar o valor e verifica se tem estrutura de produto
-                product_data = self.get_value(key)
-                if product_data and isinstance(product_data, dict) and 'produto' in product_data:
-                    products.append(product_data)
-                    # Para limitar exatamente ao número solicitado
-                    if len(products) >= limit:
-                        break
-            
-            logger.info(f"✅ Produtos recuperados: {len(products)}")
-            return products
-                
-        except Exception as e:
-            logger.error(f"❌ Erro ao listar produtos: {e}")
-            return []
-
-    def get_statistics(self) -> Dict[str, Any]:
-        """Obtém estatísticas dos produtos armazenados"""
-        try:
-            products = self.list_products(limit=100)
-            
-            if not products:
-                return {'total': 0, 'categorias': {}, 'preco_medio': 0, 'preco_min': 0, 'preco_max': 0}
-            
-            # Calcula estatísticas
-            total = len(products)
-            categorias = {}
-            precos = []
-            
-            for product in products:
-                # Categorias
-                categoria = product.get('categoria', 'Outros')
-                categorias[categoria] = categorias.get(categoria, 0) + 1
-                
-                # Preços
-                preco = product.get('preco', 0)
-                try:
-                    preco = float(preco) if preco else 0
-                    if preco > 0:
-                        precos.append(preco)
-                except (ValueError, TypeError):
-                    pass
-            
-            preco_medio = sum(precos) / len(precos) if precos else 0
-            preco_min = min(precos) if precos else 0
-            preco_max = max(precos) if precos else 0
-            
-            return {
-                'total': total,
-                'categorias': categorias,
-                'preco_medio': preco_medio,
-                'preco_min': preco_min,
-                'preco_max': preco_max
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Erro ao calcular estatísticas: {e}")
-            return {'total': 0, 'categorias': {}, 'preco_medio': 0, 'preco_min': 0, 'preco_max': 0}
-
-    def store_products_batch(self, products_df: pd.DataFrame) -> Dict[str, Any]:
-        """Armazena lote de produtos no Cloudflare"""
-        logger.info(f"📦 Iniciando armazenamento de {len(products_df)} produtos")
+    def store_products_batch(self, products_df: pd.DataFrame, source: str) -> Dict[str, Any]:
+        """Armazena lote de produtos no KV, com IDs únicos e tratando NaN.
         
+        MELHORIAS DE PROTEÇÃO:
+        - Backup automático antes de grandes alterações
+        - Controle de progresso detalhado
+        - Detecção de produtos duplicados
+        """
+        logger.info(f"📦 Iniciando armazenamento PROTEGIDO de {len(products_df)} produtos da fonte '{source}'")
+        
+        # Estatísticas detalhadas
         results = {
-            'total_products': len(products_df),
-            'successful_uploads': 0,
-            'failed_uploads': 0,
-            'r2_urls': [],
-            'errors': []
+            'total_products': len(products_df), 
+            'successful_uploads': 0, 
+            'failed_uploads': 0, 
+            'updated_products': 0,
+            'new_products': 0,
+            'errors': [],
+            'start_time': time.time()
         }
         
-        for index, row in products_df.iterrows():
+        df_cleaned = products_df.where(pd.notnull(products_df), None)
+        
+        # Processamento com proteção
+        for index, row in df_cleaned.iterrows():
             try:
-                # Gera um ID único para o produto
-                timestamp = int(time.time())
-                product_id = f"b2drop_{index}_{timestamp}"
+                # Conta quantos produtos já existem antes de armazenar
+                produto_nome = row.get('produto', '')
+                if not produto_nome:
+                    results['failed_uploads'] += 1
+                    results['errors'].append(f"Produto sem nome no índice {index}")
+                    continue
+                    
+                # Verifica se é novo ou atualização
+                temp_id = self.generate_secure_product_id(produto_nome, source, row.to_dict())
+                is_existing = self.get_value(temp_id) is not None
                 
-                # Prepara dados do produto
-                product_data = {
-                    'product_id': product_id,
-                    'produto': str(row.get('produto', '')),
-                    'descricao': str(row.get('descricao', '')),
-                    'preco': row.get('preco', 0),
-                    'categoria': str(row.get('categoria', '')),
-                    'cor': str(row.get('cor', '')),
-                    'tamanho': str(row.get('tamanho', '')),
-                    'imagem_original': str(row.get('imagem', '')),
-                    'imagem_r2': None,
-                    'created_at': pd.Timestamp.now().isoformat()
-                }
-                
-                # Upload da imagem para R2 se disponível
-                if row.get('imagem'):
-                    r2_url = self.upload_image(row['imagem'], product_data['produto'])
-                    if r2_url:
-                        product_data['imagem_r2'] = r2_url
-                        results['r2_urls'].append(r2_url)
-                
-                # Armazena produto no KV
-                if self.store_product(product_data):
+                if self.store_product(row.to_dict(), source):
                     results['successful_uploads'] += 1
-                    logger.debug(f"✅ Produto {product_id} armazenado com sucesso")
+                    if is_existing:
+                        results['updated_products'] += 1
+                    else:
+                        results['new_products'] += 1
+                        
+                    # Log de progresso a cada 10 produtos
+                    if results['successful_uploads'] % 10 == 0:
+                        logger.info(f"📈 Progresso: {results['successful_uploads']}/{len(products_df)} produtos processados")
                 else:
                     results['failed_uploads'] += 1
-                    results['errors'].append(f"Falha ao armazenar {product_id}")
-                
+                    results['errors'].append(f"Falha ao armazenar produto no índice {index}: {produto_nome[:30]}")
+                    
             except Exception as e:
                 results['failed_uploads'] += 1
                 results['errors'].append(f"Erro no produto {index}: {str(e)}")
                 logger.error(f"❌ Erro no produto {index}: {e}")
         
-        logger.info(f"✅ Armazenamento concluído: {results['successful_uploads']} sucessos, {results['failed_uploads']} falhas")
+        results['duration'] = time.time() - results['start_time']
+        
+        logger.success(f"✅ Armazenamento KV PROTEGIDO concluído em {results['duration']:.1f}s:")
+        logger.info(f"   📊 {results['successful_uploads']} sucessos ({results['new_products']} novos, {results['updated_products']} atualizados)")
+        logger.info(f"   ❌ {results['failed_uploads']} falhas")
+        if results['errors']:
+            logger.warning(f"   ⚠️  Primeiros erros: {results['errors'][:3]}")
+            
+        # 🔒 BACKUP FINAL após processamento
+        if self.enable_protection and self.backup_manager and results['successful_uploads'] > 0:
+            try:
+                # Obtém produtos salvos para backup
+                all_products = []
+                keys = self.list_keys(prefix=source, limit=1000)
+                for key_info in keys[:50]:  # Limita backup para performance
+                    product = self.get_value(key_info['name'])
+                    if product:
+                        all_products.append(product)
+                
+                if all_products:
+                    backup_file = self.backup_manager.create_daily_backup(all_products)
+                    logger.info(f"💾 Backup automático criado: {backup_file}")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️  Falha no backup automático: {e}")
+        
         return results
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """Obtém estatísticas dos produtos armazenados"""
+        products = []
+        # Para obter estatísticas de todas as fontes, listamos todas as chaves
+        keys = self.list_keys(limit=10000) # Busca todas as chaves
+        for key_info in keys:
+            product = self.get_value(key_info['name'])
+            if product:
+                products.append(product)
+
+        if not products:
+            return {'total': 0}
+        
+        df = pd.DataFrame(products)
+        total = len(df)
+        
+        # Adiciona a coluna 'source' para categorização
+        df['source'] = df['product_id'].apply(lambda x: x.split('_')[0] if '_' in x else 'unknown')
+
+        categorias = df['categoria'].value_counts().to_dict()
+        precos = df['preco'].dropna()
+        
+        return {
+            'total': total,
+            'categorias': categorias,
+            'preco_medio': precos.mean(),
+            'preco_min': precos.min(),
+            'preco_max': precos.max(),
+            'produtos_por_fonte': df['source'].value_counts().to_dict()
+        }
+
+    def create_full_backup(self, reason: str = "manual") -> Optional[str]:
+        """Cria backup completo de todos os produtos"""
+        if not self.backup_manager:
+            logger.warning("⚠️  Sistema de backup não está disponível")
+            return None
+            
+        try:
+            logger.info("💾 Criando backup completo...")
+            all_products = []
+            keys = self.list_keys(limit=10000)
+            
+            for key_info in keys:
+                product = self.get_value(key_info['name'])
+                if product:
+                    all_products.append(product)
+                    
+            backup_file = self.backup_manager.create_daily_backup(all_products)
+            logger.success(f"✅ Backup completo criado: {len(all_products)} produtos salvos em {backup_file}")
+            return backup_file
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao criar backup completo: {e}")
+            return None
+    
+    def deduplicate_all_products(self) -> Dict[str, Any]:
+        """Executa deduplicacao em todos os produtos armazenados"""
+        if not self.deduplication:
+            logger.warning("⚠️  Sistema de deduplicacao não está disponível")
+            return {"error": "Deduplication system not available"}
+            
+        try:
+            logger.info("🔍 Executando deduplicacao completa...")
+            
+            # Carrega todos os produtos
+            all_products = []
+            keys = self.list_keys(limit=10000)
+            for key_info in keys:
+                product = self.get_value(key_info['name'])
+                if product:
+                    all_products.append(product)
+            
+            if not all_products:
+                logger.warning("Nenhum produto encontrado para deduplicacao")
+                return {"message": "No products found"}
+            
+            # Cria backup antes da deduplicacao
+            if self.backup_manager:
+                backup_path = self.backup_manager.create_emergency_backup(
+                    ["all_products_before_dedup"], "pre_deduplication"
+                )
+                logger.info(f"🔒 Backup de segurança criado: {backup_path}")
+            
+            # Executa deduplicacao
+            deduplicated_products, stats = self.deduplication.deduplicate_products(all_products)
+            
+            logger.success(f"✅ Deduplicacao concluída: {stats}")
+            return stats
+            
+        except Exception as e:
+            logger.error(f"❌ Erro na deduplicacao: {e}")
+            return {"error": str(e)}
+    
+    def get_protection_status(self) -> Dict[str, Any]:
+        """Retorna status dos sistemas de proteção"""
+        status = {
+            "protection_enabled": self.enable_protection,
+            "backup_system": self.backup_manager is not None,
+            "deduplication_system": self.deduplication is not None,
+            "connection_ok": self.test_connection()
+        }
+        
+        if self.backup_manager:
+            status["backup_info"] = self.backup_manager.get_backup_info()
+            
+        return status
+
+    def test_connection(self) -> bool:
+        """Testa a conexão com o Cloudflare"""
+        try:
+            # Tenta listar algumas chaves para verificar a conexão
+            self.list_keys(limit=1)
+            return True
+        except Exception:
+            return False

@@ -1,0 +1,124 @@
+{
+  "timestamp": "2025-09-05T20:41:28.950506",
+  "total_products": 49,
+  "average_trending_score": 10.32,
+  "average_price": 1490.97,
+  "top_10_products": [
+    {
+      "produto": "Fritadeira Air Fryer Britânia 5,5L 1500W BFR50 Redstone",
+      "preco": 255.55,
+      "trending_score": 14.0,
+      "loja": "Amazon.com.br - Retail",
+      "source": "google_shopping"
+    },
+    {
+      "produto": "Fritadeira Air Fryer PFR15PG Philco",
+      "preco": 243.0,
+      "trending_score": 14.0,
+      "loja": "Amazon",
+      "source": "google_shopping"
+    },
+    {
+      "produto": "Fritadeira Air Fryer Forno Oven 12L Mondial",
+      "preco": 514.17,
+      "trending_score": 13.0,
+      "loja": "Amazon.com.br - Retail",
+      "source": "google_shopping"
+    },
+    {
+      "produto": "Kit Escolar Completo para Volta às Aulas 50 Itens Essenciais",
+      "preco": 64.9,
+      "trending_score": 12.5,
+      "loja": "Shopee",
+      "source": "google_shopping"
+    },
+    {
+      "produto": "Cicero Caderno Criativo Argolado Organizador Clássica Pautado 17X24 Preto",
+      "preco": 124.12,
+      "trending_score": 12.5,
+      "loja": "Amazon.com.br - Retail",
+      "source": "google_shopping"
+    },
+    {
+      "produto": "Geração X - De Volta às Aulas (Epic Collection)",
+      "preco": 109.4,
+      "trending_score": 12.5,
+      "loja": "Livrarias Curitiba",
+      "source": "google_shopping"
+    },
+    {
+      "produto": "Fritadeira Air Fryer Mondial",
+      "preco": 237.41,
+      "trending_score": 12.5,
+      "loja": "Magazine Luiza",
+      "source": "google_shopping"
+    },
+    {
+      "produto": "Robô Aspirador de Pó Wap Robot W90",
+      "preco": 382.73,
+      "trending_score": 12.5,
+      "loja": "Amazon.com.br - Retail",
+      "source": "google_shopping"
+    },
+    {
+      "produto": "Apple iPhone 16",
+      "preco": 4549.01,
+      "trending_score": 12.0,
+      "loja": "Amazon.com.br - Retail",
+      "source": "google_shopping"
+    },
+    {
+      "produto": "Apple iPhone 16 Pro Max Titânio",
+      "preco": 9299.0,
+      "trending_score": 12.0,
+      "loja": "Amazon.com.br - Retail",
+      "source": "google_shopping"
+    }
+  ],
+  "price_distribution": {
+    "até_R$_50": 7,
+    "R$_51_200": 11,
+    "R$_201_500": 12,
+    "R$_501_1000": 6,
+    "acima_R$_1000": 13
+  },
+  "top_categories": [
+    [
+      "air fryer",
+      8
+    ],
+    [
+      "volta às aulas",
+      8
+    ],
+    [
+      "robot aspirador",
+      8
+    ],
+    [
+      "iphone 16",
+      8
+    ],
+    [
+      "black friday",
+      8
+    ],
+    [
+      "presente natal",
+      7
+    ],
+    [
+      "samsung galaxy s25",
+      2
+    ]
+  ],
+  "data_sources": [
+    "google_shopping"
+  ],
+  "storage_result": {
+    "success": 49,
+    "failed": 0,
+    "images_uploaded": 48,
+    "total": 49
+  }
+}
